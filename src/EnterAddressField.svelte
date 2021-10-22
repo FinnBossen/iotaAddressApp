@@ -1,37 +1,27 @@
 <script lang="ts">
     import {addAddress} from "./AddressStore"
+    import {checkBalance} from "./IotaService";
+    import {MQTTListener} from "./MQTTWebsocketListener";
+
 
     let currentSearch;
 
     async function enterNewAddress(){
-        addAddress({addressHash:currentSearch,balance:1212})
-        currentSearch = '';
+        let balance;
+        // try catch needs to be different
+        try {
+           balance = await checkBalance(currentSearch);
+        }catch (e){
+            alert("Could not find Address");
+        }
+        try {
+            addAddress({addressHash:currentSearch,balance:balance})
+            MQTTListener.addSubscription(currentSearch)
+            currentSearch = '';
+        }catch (e){
+            alert(e);
+        }
     }
-
-
-
-    /*
-    Iota.setLogger(consoleLog);
-    const client = new Iota.SingleNodeClient("https://chrysalis-nodes.iota.org/");
-    const health = await client.health();
-    consoleLog("Is the node healthy", health ? "Yes" : "No");
-    consoleLog();
-
-    const info = await client.info();
-    consoleLog("Node Info");
-    Iota.logInfo("", info);
-    consoleLog();
-
-    const tipsResponse = await client.tips();
-    consoleLog("Tips");
-    Iota.logTips("", tipsResponse);
-    consoleLog();
-    const address = await client.addressEd25519(output.output.address.address);
-    consoleLog("Address");
-    consoleLog("\tAddress:", address.address);
-    consoleLog("\tBalance:", address.balance);
-
-    */
 </script>
 
 <style>

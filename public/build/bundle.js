@@ -1,7 +1,11 @@
 
 (function(l, r) { if (!l || l.getElementById('livereloadscript')) return; r = l.createElement('script'); r.async = 1; r.src = '//' + (self.location.host || 'localhost').split(':')[0] + ':35729/livereload.js?snipver=1'; r.id = 'livereloadscript'; l.getElementsByTagName('head')[0].appendChild(r) })(self.document);
-var app = (function () {
+var app = (function (Iota) {
     'use strict';
+
+    function _interopDefaultLegacy (e) { return e && typeof e === 'object' && 'default' in e ? e : { 'default': e }; }
+
+    var Iota__default = /*#__PURE__*/_interopDefaultLegacy(Iota);
 
     function noop() { }
     function add_location(element, file, line, column, char) {
@@ -26,6 +30,21 @@ var app = (function () {
     }
     function is_empty(obj) {
         return Object.keys(obj).length === 0;
+    }
+    function validate_store(store, name) {
+        if (store != null && typeof store.subscribe !== 'function') {
+            throw new Error(`'${name}' is not a store with a 'subscribe' method`);
+        }
+    }
+    function subscribe(store, ...callbacks) {
+        if (store == null) {
+            return noop;
+        }
+        const unsub = store.subscribe(...callbacks);
+        return unsub.unsubscribe ? () => unsub.unsubscribe() : unsub;
+    }
+    function component_subscribe(component, store, callback) {
+        component.$$.on_destroy.push(subscribe(store, callback));
     }
     function append(target, node) {
         target.appendChild(node);
@@ -72,6 +91,9 @@ var app = (function () {
     function children(element) {
         return Array.from(element.childNodes);
     }
+    function set_input_value(input, value) {
+        input.value = value == null ? '' : value;
+    }
     function custom_event(type, detail, bubbles = false) {
         const e = document.createEvent('CustomEvent');
         e.initCustomEvent(type, bubbles, false, detail);
@@ -86,6 +108,9 @@ var app = (function () {
         if (!current_component)
             throw new Error('Function called outside component initialization');
         return current_component;
+    }
+    function onMount(fn) {
+        get_current_component().$$.on_mount.push(fn);
     }
     function createEventDispatcher() {
         const component = get_current_component();
@@ -202,6 +227,12 @@ var app = (function () {
             block.o(local);
         }
     }
+
+    const globals = (typeof window !== 'undefined'
+        ? window
+        : typeof globalThis !== 'undefined'
+            ? globalThis
+            : global);
     function create_component(block) {
         block && block.c();
     }
@@ -409,15 +440,175 @@ var app = (function () {
         $inject_state() { }
     }
 
+    const client = new Iota__default["default"].SingleNodeClient("https://api.lb-0.h.chrysalis-devnet.iota.cafe/");
+    async function checkHealth() {
+        const health = await client.health();
+        return health ? "Yes" : "No";
+    }
+    async function checkInfo() {
+        const info = await client.info();
+        console.log("Node Info");
+        console.log("\tName:", info.name);
+        console.log("\tVersion:", info.version);
+        console.log("\tIs Healthy:", info.isHealthy);
+        console.log("\tNetwork Id:", info.networkId);
+        console.log("\tLatest Milestone Index:", info.latestMilestoneIndex);
+        console.log("\tConfirmed Milestone Index:", info.confirmedMilestoneIndex);
+        console.log("\tPruning Index:", info.pruningIndex);
+        console.log("\tFeatures:", info.features);
+        console.log("\tMin PoW Score:", info.minPoWScore);
+    }
+    async function checkBalance(addressHash) {
+        const address = await client.address(addressHash);
+        console.log("Address");
+        console.log("\tAddress:", address.address);
+        console.log("\tBalance:", address.balance);
+        return address.balance;
+    }
+
+    const subscriber_queue = [];
+    /**
+     * Create a `Writable` store that allows both updating and reading by subscription.
+     * @param {*=}value initial value
+     * @param {StartStopNotifier=}start start and stop notifications for subscriptions
+     */
+    function writable(value, start = noop) {
+        let stop;
+        const subscribers = new Set();
+        function set(new_value) {
+            if (safe_not_equal(value, new_value)) {
+                value = new_value;
+                if (stop) { // store is ready
+                    const run_queue = !subscriber_queue.length;
+                    for (const subscriber of subscribers) {
+                        subscriber[1]();
+                        subscriber_queue.push(subscriber, value);
+                    }
+                    if (run_queue) {
+                        for (let i = 0; i < subscriber_queue.length; i += 2) {
+                            subscriber_queue[i][0](subscriber_queue[i + 1]);
+                        }
+                        subscriber_queue.length = 0;
+                    }
+                }
+            }
+        }
+        function update(fn) {
+            set(fn(value));
+        }
+        function subscribe(run, invalidate = noop) {
+            const subscriber = [run, invalidate];
+            subscribers.add(subscriber);
+            if (subscribers.size === 1) {
+                stop = start(set) || noop;
+            }
+            run(value);
+            return () => {
+                subscribers.delete(subscriber);
+                if (subscribers.size === 0) {
+                    stop();
+                    stop = null;
+                }
+            };
+        }
+        return { set, update, subscribe };
+    }
+
+    const addresses = writable([]);
+    function addAddress(newAddress) {
+        addresses.update($address => {
+            for (const address of $address) {
+                if (address.addressHash === newAddress.addressHash) {
+                    throw new Error('Address is already listed');
+                }
+            }
+            $address = [...$address, newAddress];
+            return $address;
+        });
+    }
+    function removeAddress(removableAddressHash) {
+        addresses.update($address => {
+            $address = $address.filter(t => t.addressHash !== removableAddressHash);
+            //$address= [...$address];
+            return $address;
+        });
+    }
+    function addBalanceToAddress(addressHash, balance) {
+        addresses.update($address => {
+            for (const address of $address) {
+                if (address.addressHash === addressHash) {
+                    const index = $address.indexOf(address);
+                    $address[index].balance = $address[index].balance + balance;
+                }
+            }
+            $address = [...$address];
+            return $address;
+        });
+    }
+
+    class MQTTWebsocketListener {
+        constructor() {
+            this.conn = new WebSocket('ws://localhost:9090');
+            this.conn.onopen = () => {
+                console.log("Connected to MQTT WebSocket");
+            };
+            this.conn.onmessage = (msg) => {
+                const data = JSON.parse(msg.data);
+                console.log("Got message", data);
+                try {
+                    switch (data.type) {
+                        case "registeredInWebsocket":
+                            console.log("Registered in Websocket with " + data.websocketId);
+                            break;
+                        case "updateBalance":
+                            console.log("Changing amount of " + data.address + " to " + data.amount);
+                            addBalanceToAddress(data.address, data.amount);
+                            break;
+                        case "subscriptionSuccessful":
+                            console.log("Subscription for " + data.address + "was successful and is registered with subscription id " + data.subscriptionId);
+                            break;
+                        case "unSubscriptionSuccessful":
+                            console.log("Unsubscription for " + data.address + " with id " + data.subscriptionId + "was successful");
+                            break;
+                        default:
+                            break;
+                    }
+                }
+                catch (e) {
+                    console.log('Error', e);
+                }
+            };
+            this.conn.onerror = function (err) {
+                console.log("Got error", err);
+            };
+        }
+        addSubscription(addressHash) {
+            this.conn.send(JSON.stringify({
+                type: "subscribe",
+                address: addressHash
+            }));
+        }
+        removeSubscription(addressHash) {
+            this.conn.send(JSON.stringify({
+                type: "unsubscribe",
+                address: addressHash
+            }));
+        }
+    }
+    const MQTTListener = new MQTTWebsocketListener();
+
     /* src\AddressItem.svelte generated by Svelte v3.44.0 */
-    const file$2 = "src\\AddressItem.svelte";
+
+    const { console: console_1$1 } = globals;
+    const file$3 = "src\\AddressItem.svelte";
 
     function create_fragment$3(ctx) {
     	let ion_item_sliding;
     	let ion_item;
-    	let ion_label;
+    	let ion_label0;
     	let t0;
     	let t1;
+    	let ion_label1;
     	let t2;
     	let t3;
     	let ion_item_options;
@@ -429,20 +620,22 @@ var app = (function () {
     		c: function create() {
     			ion_item_sliding = element("ion-item-sliding");
     			ion_item = element("ion-item");
-    			ion_label = element("ion-label");
-    			t0 = text(/*addressNumber*/ ctx[0]);
+    			ion_label0 = element("ion-label");
+    			t0 = text(/*addressHash*/ ctx[0]);
     			t1 = space();
+    			ion_label1 = element("ion-label");
     			t2 = text(/*iotaBalance*/ ctx[1]);
     			t3 = space();
     			ion_item_options = element("ion-item-options");
     			ion_item_option = element("ion-item-option");
     			ion_item_option.textContent = "Unread";
-    			add_location(ion_label, file$2, 10, 8, 243);
-    			add_location(ion_item, file$2, 9, 4, 223);
-    			add_location(ion_item_option, file$2, 13, 8, 357);
+    			add_location(ion_label0, file$3, 15, 8, 462);
+    			add_location(ion_label1, file$3, 16, 8, 509);
+    			add_location(ion_item, file$3, 14, 4, 442);
+    			add_location(ion_item_option, file$3, 19, 8, 609);
     			set_custom_element_data(ion_item_options, "side", "end");
-    			add_location(ion_item_options, file$2, 12, 4, 318);
-    			add_location(ion_item_sliding, file$2, 8, 0, 199);
+    			add_location(ion_item_options, file$3, 18, 4, 570);
+    			add_location(ion_item_sliding, file$3, 13, 0, 418);
     		},
     		l: function claim(nodes) {
     			throw new Error("options.hydrate only works if the component was compiled with the `hydratable: true` option");
@@ -450,21 +643,22 @@ var app = (function () {
     		m: function mount(target, anchor) {
     			insert_dev(target, ion_item_sliding, anchor);
     			append_dev(ion_item_sliding, ion_item);
-    			append_dev(ion_item, ion_label);
-    			append_dev(ion_label, t0);
-    			append_dev(ion_label, t1);
-    			append_dev(ion_label, t2);
+    			append_dev(ion_item, ion_label0);
+    			append_dev(ion_label0, t0);
+    			append_dev(ion_item, t1);
+    			append_dev(ion_item, ion_label1);
+    			append_dev(ion_label1, t2);
     			append_dev(ion_item_sliding, t3);
     			append_dev(ion_item_sliding, ion_item_options);
     			append_dev(ion_item_options, ion_item_option);
 
     			if (!mounted) {
-    				dispose = listen_dev(ion_item_option, "click", /*click_handler*/ ctx[2], false, false, false);
+    				dispose = listen_dev(ion_item_option, "click", /*click_handler*/ ctx[3], false, false, false);
     				mounted = true;
     			}
     		},
     		p: function update(ctx, [dirty]) {
-    			if (dirty & /*addressNumber*/ 1) set_data_dev(t0, /*addressNumber*/ ctx[0]);
+    			if (dirty & /*addressHash*/ 1) set_data_dev(t0, /*addressHash*/ ctx[0]);
     			if (dirty & /*iotaBalance*/ 2) set_data_dev(t2, /*iotaBalance*/ ctx[1]);
     		},
     		i: noop,
@@ -487,39 +681,43 @@ var app = (function () {
     	return block;
     }
 
-    function remove() {
-    	
-    }
-
     function instance$3($$self, $$props, $$invalidate) {
     	let { $$slots: slots = {}, $$scope } = $$props;
     	validate_slots('AddressItem', slots, []);
-    	let { addressNumber } = $$props;
+    	let { addressHash } = $$props;
     	let { iotaBalance } = $$props;
     	const dispatch = createEventDispatcher();
-    	const writable_props = ['addressNumber', 'iotaBalance'];
+
+    	async function remove() {
+    		console.log("removing" + addressHash);
+    		MQTTListener.removeSubscription(addressHash);
+    		dispatch('remove', addressHash);
+    	}
+
+    	const writable_props = ['addressHash', 'iotaBalance'];
 
     	Object.keys($$props).forEach(key => {
-    		if (!~writable_props.indexOf(key) && key.slice(0, 2) !== '$$' && key !== 'slot') console.warn(`<AddressItem> was created with unknown prop '${key}'`);
+    		if (!~writable_props.indexOf(key) && key.slice(0, 2) !== '$$' && key !== 'slot') console_1$1.warn(`<AddressItem> was created with unknown prop '${key}'`);
     	});
 
     	const click_handler = () => remove();
 
     	$$self.$$set = $$props => {
-    		if ('addressNumber' in $$props) $$invalidate(0, addressNumber = $$props.addressNumber);
+    		if ('addressHash' in $$props) $$invalidate(0, addressHash = $$props.addressHash);
     		if ('iotaBalance' in $$props) $$invalidate(1, iotaBalance = $$props.iotaBalance);
     	};
 
     	$$self.$capture_state = () => ({
-    		addressNumber,
+    		addressHash,
     		iotaBalance,
     		createEventDispatcher,
+    		MQTTListener,
     		dispatch,
     		remove
     	});
 
     	$$self.$inject_state = $$props => {
-    		if ('addressNumber' in $$props) $$invalidate(0, addressNumber = $$props.addressNumber);
+    		if ('addressHash' in $$props) $$invalidate(0, addressHash = $$props.addressHash);
     		if ('iotaBalance' in $$props) $$invalidate(1, iotaBalance = $$props.iotaBalance);
     	};
 
@@ -527,13 +725,13 @@ var app = (function () {
     		$$self.$inject_state($$props.$$inject);
     	}
 
-    	return [addressNumber, iotaBalance, click_handler];
+    	return [addressHash, iotaBalance, remove, click_handler];
     }
 
     class AddressItem extends SvelteComponentDev {
     	constructor(options) {
     		super(options);
-    		init(this, options, instance$3, create_fragment$3, safe_not_equal, { addressNumber: 0, iotaBalance: 1 });
+    		init(this, options, instance$3, create_fragment$3, safe_not_equal, { addressHash: 0, iotaBalance: 1 });
 
     		dispatch_dev("SvelteRegisterComponent", {
     			component: this,
@@ -545,20 +743,20 @@ var app = (function () {
     		const { ctx } = this.$$;
     		const props = options.props || {};
 
-    		if (/*addressNumber*/ ctx[0] === undefined && !('addressNumber' in props)) {
-    			console.warn("<AddressItem> was created without expected prop 'addressNumber'");
+    		if (/*addressHash*/ ctx[0] === undefined && !('addressHash' in props)) {
+    			console_1$1.warn("<AddressItem> was created without expected prop 'addressHash'");
     		}
 
     		if (/*iotaBalance*/ ctx[1] === undefined && !('iotaBalance' in props)) {
-    			console.warn("<AddressItem> was created without expected prop 'iotaBalance'");
+    			console_1$1.warn("<AddressItem> was created without expected prop 'iotaBalance'");
     		}
     	}
 
-    	get addressNumber() {
+    	get addressHash() {
     		throw new Error("<AddressItem>: Props cannot be read directly from the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
     	}
 
-    	set addressNumber(value) {
+    	set addressHash(value) {
     		throw new Error("<AddressItem>: Props cannot be set directly on the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
     	}
 
@@ -572,26 +770,28 @@ var app = (function () {
     }
 
     /* src\AddressList.svelte generated by Svelte v3.44.0 */
-    const file$1 = "src\\AddressList.svelte";
+    const file$2 = "src\\AddressList.svelte";
 
     function get_each_context(ctx, list, i) {
     	const child_ctx = ctx.slice();
-    	child_ctx[5] = list[i];
+    	child_ctx[3] = list[i];
     	return child_ctx;
     }
 
-    // (24:4) {#each allAddressesArray as address}
+    // (20:4) {#each $addresses as address}
     function create_each_block(ctx) {
     	let addressitem;
     	let current;
 
     	addressitem = new AddressItem({
     			props: {
-    				addressNumber: /*address*/ ctx[5].address,
-    				iotaBalance: /*address*/ ctx[5].iotaAmount
+    				addressHash: /*address*/ ctx[3].addressHash,
+    				iotaBalance: /*address*/ ctx[3].balance
     			},
     			$$inline: true
     		});
+
+    	addressitem.$on("remove", /*remove_handler*/ ctx[2]);
 
     	const block = {
     		c: function create() {
@@ -601,7 +801,12 @@ var app = (function () {
     			mount_component(addressitem, target, anchor);
     			current = true;
     		},
-    		p: noop,
+    		p: function update(ctx, dirty) {
+    			const addressitem_changes = {};
+    			if (dirty & /*$addresses*/ 1) addressitem_changes.addressHash = /*address*/ ctx[3].addressHash;
+    			if (dirty & /*$addresses*/ 1) addressitem_changes.iotaBalance = /*address*/ ctx[3].balance;
+    			addressitem.$set(addressitem_changes);
+    		},
     		i: function intro(local) {
     			if (current) return;
     			transition_in(addressitem.$$.fragment, local);
@@ -620,7 +825,7 @@ var app = (function () {
     		block,
     		id: create_each_block.name,
     		type: "each",
-    		source: "(24:4) {#each allAddressesArray as address}",
+    		source: "(20:4) {#each $addresses as address}",
     		ctx
     	});
 
@@ -629,15 +834,8 @@ var app = (function () {
 
     function create_fragment$2(ctx) {
     	let ion_list;
-    	let ion_item;
-    	let ion_input;
-    	let t0;
-    	let ion_button;
-    	let t2;
     	let current;
-    	let mounted;
-    	let dispose;
-    	let each_value = /*allAddressesArray*/ ctx[1];
+    	let each_value = /*$addresses*/ ctx[0];
     	validate_each_argument(each_value);
     	let each_blocks = [];
 
@@ -652,52 +850,28 @@ var app = (function () {
     	const block = {
     		c: function create() {
     			ion_list = element("ion-list");
-    			ion_item = element("ion-item");
-    			ion_input = element("ion-input");
-    			t0 = space();
-    			ion_button = element("ion-button");
-    			ion_button.textContent = "Enter";
-    			t2 = space();
 
     			for (let i = 0; i < each_blocks.length; i += 1) {
     				each_blocks[i].c();
     			}
 
-    			set_custom_element_data(ion_input, "placeholder", "Enter Address");
-    			add_location(ion_input, file$1, 19, 8, 627);
-    			add_location(ion_button, file$1, 20, 8, 711);
-    			add_location(ion_item, file$1, 18, 4, 607);
-    			add_location(ion_list, file$1, 16, 0, 589);
+    			add_location(ion_list, file$2, 17, 0, 384);
     		},
     		l: function claim(nodes) {
     			throw new Error("options.hydrate only works if the component was compiled with the `hydratable: true` option");
     		},
     		m: function mount(target, anchor) {
     			insert_dev(target, ion_list, anchor);
-    			append_dev(ion_list, ion_item);
-    			append_dev(ion_item, ion_input);
-    			append_dev(ion_item, t0);
-    			append_dev(ion_item, ion_button);
-    			append_dev(ion_list, t2);
 
     			for (let i = 0; i < each_blocks.length; i += 1) {
     				each_blocks[i].m(ion_list, null);
     			}
 
     			current = true;
-
-    			if (!mounted) {
-    				dispose = [
-    					listen_dev(ion_input, "input", /*handleInput*/ ctx[3], false, false, false),
-    					listen_dev(ion_button, "click", /*click_handler*/ ctx[4], false, false, false)
-    				];
-
-    				mounted = true;
-    			}
     		},
     		p: function update(ctx, [dirty]) {
-    			if (dirty & /*allAddressesArray*/ 2) {
-    				each_value = /*allAddressesArray*/ ctx[1];
+    			if (dirty & /*$addresses, removeItem*/ 3) {
+    				each_value = /*$addresses*/ ctx[0];
     				validate_each_argument(each_value);
     				let i;
 
@@ -745,8 +919,6 @@ var app = (function () {
     		d: function destroy(detaching) {
     			if (detaching) detach_dev(ion_list);
     			destroy_each(each_blocks, detaching);
-    			mounted = false;
-    			run_all(dispose);
     		}
     	};
 
@@ -762,31 +934,22 @@ var app = (function () {
     }
 
     function instance$2($$self, $$props, $$invalidate) {
+    	let $addresses;
+    	validate_store(addresses, 'addresses');
+    	component_subscribe($$self, addresses, $$value => $$invalidate(0, $addresses = $$value));
     	let { $$slots: slots = {}, $$scope } = $$props;
     	validate_slots('AddressList', slots, []);
-    	let currentSearch;
-    	const allAddressesArray = [];
 
-    	for (let i = 0; i < 10; i++) {
-    		let iotaAddress = {
-    			address: Math.floor(Math.random() * 1000000000),
-    			iotaAmount: Math.floor(Math.random() * 1000000000)
-    		};
-
-    		allAddressesArray.push(iotaAddress);
+    	for (let i = 0; i < 1; i++) {
+    		try {
+    			addAddress({ addressHash: 'dsad', balance: 1212 });
+    		} catch(e) {
+    			alert(e);
+    		}
     	}
 
-    	function addAddress(addressNumber) {
-    		let iotaAddress = {
-    			address: addressNumber,
-    			iotaAmount: Math.floor(Math.random() * 1000000000)
-    		};
-
-    		allAddressesArray.push(iotaAddress);
-    	}
-
-    	function handleInput(e) {
-    		$$invalidate(0, currentSearch = e.target.value);
+    	function removeItem(hashAddress) {
+    		removeAddress(hashAddress);
     	}
 
     	const writable_props = [];
@@ -795,25 +958,18 @@ var app = (function () {
     		if (!~writable_props.indexOf(key) && key.slice(0, 2) !== '$$' && key !== 'slot') console.warn(`<AddressList> was created with unknown prop '${key}'`);
     	});
 
-    	const click_handler = () => addAddress(currentSearch);
+    	const remove_handler = e => removeItem(e.detail);
 
     	$$self.$capture_state = () => ({
     		AddressItem,
-    		currentSearch,
-    		allAddressesArray,
     		addAddress,
-    		handleInput
+    		addresses,
+    		removeAddress,
+    		removeItem,
+    		$addresses
     	});
 
-    	$$self.$inject_state = $$props => {
-    		if ('currentSearch' in $$props) $$invalidate(0, currentSearch = $$props.currentSearch);
-    	};
-
-    	if ($$props && "$$inject" in $$props) {
-    		$$self.$inject_state($$props.$$inject);
-    	}
-
-    	return [currentSearch, allAddressesArray, addAddress, handleInput, click_handler];
+    	return [$addresses, removeItem, remove_handler];
     }
 
     class AddressList extends SvelteComponentDev {
@@ -831,18 +987,66 @@ var app = (function () {
     }
 
     /* src\EnterAddressField.svelte generated by Svelte v3.44.0 */
+    const file$1 = "src\\EnterAddressField.svelte";
 
     function create_fragment$1(ctx) {
+    	let ion_item;
+    	let input;
+    	let t;
+    	let ion_button;
+    	let ion_icon;
+    	let mounted;
+    	let dispose;
+
     	const block = {
-    		c: noop,
+    		c: function create() {
+    			ion_item = element("ion-item");
+    			input = element("input");
+    			t = space();
+    			ion_button = element("ion-button");
+    			ion_icon = element("ion-icon");
+    			attr_dev(input, "class", "InputButton svelte-snlv3o");
+    			attr_dev(input, "placeholder", "Enter Address");
+    			add_location(input, file$1, 34, 4, 871);
+    			set_custom_element_data(ion_icon, "slot", "icon-only");
+    			set_custom_element_data(ion_icon, "name", "add-circle-sharp");
+    			add_location(ion_icon, file$1, 36, 8, 1032);
+    			set_custom_element_data(ion_button, "size", "middle");
+    			add_location(ion_button, file$1, 35, 4, 960);
+    			add_location(ion_item, file$1, 32, 0, 724);
+    		},
     		l: function claim(nodes) {
     			throw new Error("options.hydrate only works if the component was compiled with the `hydratable: true` option");
     		},
-    		m: noop,
-    		p: noop,
+    		m: function mount(target, anchor) {
+    			insert_dev(target, ion_item, anchor);
+    			append_dev(ion_item, input);
+    			set_input_value(input, /*currentSearch*/ ctx[0]);
+    			append_dev(ion_item, t);
+    			append_dev(ion_item, ion_button);
+    			append_dev(ion_button, ion_icon);
+
+    			if (!mounted) {
+    				dispose = [
+    					listen_dev(input, "input", /*input_input_handler*/ ctx[2]),
+    					listen_dev(ion_button, "click", /*click_handler*/ ctx[3], false, false, false)
+    				];
+
+    				mounted = true;
+    			}
+    		},
+    		p: function update(ctx, [dirty]) {
+    			if (dirty & /*currentSearch*/ 1 && input.value !== /*currentSearch*/ ctx[0]) {
+    				set_input_value(input, /*currentSearch*/ ctx[0]);
+    			}
+    		},
     		i: noop,
     		o: noop,
-    		d: noop
+    		d: function destroy(detaching) {
+    			if (detaching) detach_dev(ion_item);
+    			mounted = false;
+    			run_all(dispose);
+    		}
     	};
 
     	dispatch_dev("SvelteRegisterBlock", {
@@ -856,21 +1060,60 @@ var app = (function () {
     	return block;
     }
 
-    function EnterNewAddress() {
-    	
-    }
-
     function instance$1($$self, $$props, $$invalidate) {
     	let { $$slots: slots = {}, $$scope } = $$props;
     	validate_slots('EnterAddressField', slots, []);
+    	let currentSearch;
+
+    	async function enterNewAddress() {
+    		let balance;
+
+    		// try catch needs to be different
+    		try {
+    			balance = await checkBalance(currentSearch);
+    		} catch(e) {
+    			alert("Could not find Address");
+    		}
+
+    		try {
+    			addAddress({ addressHash: currentSearch, balance });
+    			MQTTListener.addSubscription(currentSearch);
+    			$$invalidate(0, currentSearch = '');
+    		} catch(e) {
+    			alert(e);
+    		}
+    	}
+
     	const writable_props = [];
 
     	Object.keys($$props).forEach(key => {
     		if (!~writable_props.indexOf(key) && key.slice(0, 2) !== '$$' && key !== 'slot') console.warn(`<EnterAddressField> was created with unknown prop '${key}'`);
     	});
 
-    	$$self.$capture_state = () => ({ EnterNewAddress });
-    	return [];
+    	function input_input_handler() {
+    		currentSearch = this.value;
+    		$$invalidate(0, currentSearch);
+    	}
+
+    	const click_handler = () => enterNewAddress();
+
+    	$$self.$capture_state = () => ({
+    		addAddress,
+    		checkBalance,
+    		MQTTListener,
+    		currentSearch,
+    		enterNewAddress
+    	});
+
+    	$$self.$inject_state = $$props => {
+    		if ('currentSearch' in $$props) $$invalidate(0, currentSearch = $$props.currentSearch);
+    	};
+
+    	if ($$props && "$$inject" in $$props) {
+    		$$self.$inject_state($$props.$$inject);
+    	}
+
+    	return [currentSearch, enterNewAddress, input_input_handler, click_handler];
     }
 
     class EnterAddressField extends SvelteComponentDev {
@@ -888,6 +1131,8 @@ var app = (function () {
     }
 
     /* src\App.svelte generated by Svelte v3.44.0 */
+
+    const { console: console_1 } = globals;
     const file = "src\\App.svelte";
 
     function create_fragment(ctx) {
@@ -928,17 +1173,17 @@ var app = (function () {
     			ion_footer = element("ion-footer");
     			ion_button = element("ion-button");
     			ion_button.textContent = "Greet";
-    			add_location(ion_title, file, 11, 5, 264);
-    			add_location(ion_toolbar, file, 10, 4, 245);
-    			add_location(ion_header, file, 9, 3, 228);
-    			add_location(ion_content, file, 8, 2, 211);
+    			add_location(ion_title, file, 18, 5, 595);
+    			add_location(ion_toolbar, file, 17, 4, 576);
+    			add_location(ion_header, file, 16, 3, 559);
+    			add_location(ion_content, file, 15, 2, 542);
     			set_custom_element_data(ion_button, "color", "secondary");
     			set_custom_element_data(ion_button, "expand", "block");
-    			add_location(ion_button, file, 18, 3, 407);
-    			add_location(ion_footer, file, 17, 2, 391);
-    			add_location(ion_app, file, 7, 1, 199);
+    			add_location(ion_button, file, 25, 3, 738);
+    			add_location(ion_footer, file, 24, 2, 722);
+    			add_location(ion_app, file, 14, 1, 530);
     			attr_dev(main, "class", "svelte-1tky8bj");
-    			add_location(main, file, 6, 0, 191);
+    			add_location(main, file, 13, 0, 522);
     		},
     		l: function claim(nodes) {
     			throw new Error("options.hydrate only works if the component was compiled with the `hydratable: true` option");
@@ -1004,10 +1249,20 @@ var app = (function () {
     	validate_slots('App', slots, []);
     	let { name } = $$props;
     	const greet = () => alert('hi');
+
+    	onMount(async () => {
+    		// checks health and info of Iota connection
+    		console.log(await checkHealth()
+    		? "Connected successfully with iota dev network"
+    		: "Problems with connecting to iota dev network");
+
+    		await checkInfo();
+    	});
+
     	const writable_props = ['name'];
 
     	Object.keys($$props).forEach(key => {
-    		if (!~writable_props.indexOf(key) && key.slice(0, 2) !== '$$' && key !== 'slot') console.warn(`<App> was created with unknown prop '${key}'`);
+    		if (!~writable_props.indexOf(key) && key.slice(0, 2) !== '$$' && key !== 'slot') console_1.warn(`<App> was created with unknown prop '${key}'`);
     	});
 
     	$$self.$$set = $$props => {
@@ -1017,6 +1272,9 @@ var app = (function () {
     	$$self.$capture_state = () => ({
     		AddressList,
     		EnterAddressField,
+    		onMount,
+    		checkHealth,
+    		checkInfo,
     		name,
     		greet
     	});
@@ -1048,7 +1306,7 @@ var app = (function () {
     		const props = options.props || {};
 
     		if (/*name*/ ctx[0] === undefined && !('name' in props)) {
-    			console.warn("<App> was created without expected prop 'name'");
+    			console_1.warn("<App> was created without expected prop 'name'");
     		}
     	}
 
@@ -1062,13 +1320,13 @@ var app = (function () {
     }
 
     const app = new App({
-    	target: document.body,
-    	props: {
-    		name: 'IOTA Address App'
-    	}
+        target: document.body,
+        props: {
+            name: 'IOTA Address App'
+        }
     });
 
     return app;
 
-})();
+})(Iota);
 //# sourceMappingURL=bundle.js.map

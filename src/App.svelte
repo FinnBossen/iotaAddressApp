@@ -1,9 +1,20 @@
 <script lang="ts">
 	import AddressList from "./AddressList.svelte";
 	import EnterAddressField from "./EnterAddressField.svelte";
+	import {onMount} from "svelte";
+	import {checkHealth, checkInfo} from "./IotaService";
 
 	export let name: string;
+
+
+
 	const greet = () => alert('hi');
+
+	onMount(async ()=>{
+		// checks health and info of Iota connection
+		console.log(await checkHealth() ? "Connected successfully with iota dev network" : "Problems with connecting to iota dev network");
+		await checkInfo();
+	})
 
 </script>
 
