@@ -1,5 +1,5 @@
 
-(function(l, r) { if (!l || l.getElementById('livereloadscript')) return; r = l.createElement('script'); r.async = 1; r.src = '//' + (self.location.host || 'localhost').split(':')[0] + ':35729/livereload.js?snipver=1'; r.id = 'livereloadscript'; l.getElementsByTagName('head')[0].appendChild(r) })(self.document);
+(function(l, r) { if (!l || l.getElementById('livereloadscript')) return; r = l.createElement('script'); r.async = 1; r.src = '//' + (self.location.host || 'localhost').split(':')[0] + ':35730/livereload.js?snipver=1'; r.id = 'livereloadscript'; l.getElementsByTagName('head')[0].appendChild(r) })(self.document);
 var app = (function (Iota) {
     'use strict';
 
@@ -111,20 +111,6 @@ var app = (function (Iota) {
     }
     function onMount(fn) {
         get_current_component().$$.on_mount.push(fn);
-    }
-    function createEventDispatcher() {
-        const component = get_current_component();
-        return (type, detail) => {
-            const callbacks = component.$$.callbacks[type];
-            if (callbacks) {
-                // TODO are there situations where events could be dispatched
-                // in a server (non-DOM) environment?
-                const event = custom_event(type, detail);
-                callbacks.slice().forEach(fn => {
-                    fn.call(component, event);
-                });
-            }
-        };
     }
 
     const dirty_components = [];
@@ -440,32 +426,6 @@ var app = (function (Iota) {
         $inject_state() { }
     }
 
-    const client = new Iota__default["default"].SingleNodeClient("https://api.lb-0.h.chrysalis-devnet.iota.cafe/");
-    async function checkHealth() {
-        const health = await client.health();
-        return health ? "Yes" : "No";
-    }
-    async function checkInfo() {
-        const info = await client.info();
-        console.log("Node Info");
-        console.log("\tName:", info.name);
-        console.log("\tVersion:", info.version);
-        console.log("\tIs Healthy:", info.isHealthy);
-        console.log("\tNetwork Id:", info.networkId);
-        console.log("\tLatest Milestone Index:", info.latestMilestoneIndex);
-        console.log("\tConfirmed Milestone Index:", info.confirmedMilestoneIndex);
-        console.log("\tPruning Index:", info.pruningIndex);
-        console.log("\tFeatures:", info.features);
-        console.log("\tMin PoW Score:", info.minPoWScore);
-    }
-    async function checkBalance(addressHash) {
-        const address = await client.address(addressHash);
-        console.log("Address");
-        console.log("\tAddress:", address.address);
-        console.log("\tBalance:", address.balance);
-        return address.balance;
-    }
-
     const subscriber_queue = [];
     /**
      * Create a `Writable` store that allows both updating and reading by subscription.
@@ -514,33 +474,81 @@ var app = (function (Iota) {
         return { set, update, subscribe };
     }
 
+    var BalanceChoosingType;
+    (function (BalanceChoosingType) {
+        BalanceChoosingType["I"] = "i";
+        BalanceChoosingType["KI"] = "Ki";
+        BalanceChoosingType["MI"] = "Mi";
+        BalanceChoosingType["GI"] = "Gi";
+        BalanceChoosingType["TI"] = "Ti";
+        BalanceChoosingType["PI"] = "Pi";
+    })(BalanceChoosingType || (BalanceChoosingType = {}));
+    // the multiplier values for all the different showing formats of iota
+    function getMultiplier(id) {
+        switch (id) {
+            case BalanceChoosingType.I: {
+                return 1000000;
+            }
+            case BalanceChoosingType.KI: {
+                return 1000;
+            }
+            case BalanceChoosingType.MI: {
+                return 1;
+            }
+            case BalanceChoosingType.GI: {
+                return 1 / 1000;
+            }
+            case BalanceChoosingType.TI: {
+                return 1 / 1000000;
+            }
+            case BalanceChoosingType.PI: {
+                return 1 / 1000000;
+            }
+            default: {
+                return 1 / 1000000000;
+            }
+        }
+    }
+    // stores the current balance type that is chosen and distributes it to the components
+    const chosenBalanceType = writable(BalanceChoosingType.I);
+    function changeChosenBalanceType(balanceType) {
+        chosenBalanceType.set(balanceType);
+    }
+    // calculates how the number for the iota balance should be shown based on the type
+    function calculateBalanceDisplay(iotaValueBalance, type) {
+        if (type === BalanceChoosingType.I) {
+            return iotaValueBalance;
+        }
+        const miota = iotaValueBalance / getMultiplier(BalanceChoosingType.I);
+        return (miota * getMultiplier(type)).toFixed(2);
+    }
+
+    // Tried to use a map but it made problems in my AddressList even when converting it to an array (maybe I am missing something)
+    // addresses writable that distributes the changes to all components
     const addresses = writable([]);
+    // Adds address to the writable array addresses
     function addAddress(newAddress) {
         addresses.update($address => {
-            for (const address of $address) {
-                if (address.addressHash === newAddress.addressHash) {
-                    throw new Error('Address is already listed');
-                }
+            const index = $address.findIndex((address => address.addressHash == newAddress.addressHash));
+            if (index > -1) {
+                throw new Error('Address is already listed');
             }
             $address = [...$address, newAddress];
             return $address;
         });
     }
+    // Removes address to the writable array addresses
     function removeAddress(removableAddressHash) {
         addresses.update($address => {
             $address = $address.filter(t => t.addressHash !== removableAddressHash);
-            //$address= [...$address];
             return $address;
         });
     }
+    // Adds new Amount to address.balance, is called when mqtt amount change was triggered inside the websocket
     function addBalanceToAddress(addressHash, balance) {
         addresses.update($address => {
-            for (const address of $address) {
-                if (address.addressHash === addressHash) {
-                    const index = $address.indexOf(address);
-                    $address[index].balance = $address[index].balance + balance;
-                }
-            }
+            const index = $address.findIndex((address => address.addressHash == addressHash));
+            $address[index].balance = $address[index].balance + balance;
             $address = [...$address];
             return $address;
         });
@@ -548,10 +556,14 @@ var app = (function (Iota) {
 
     class MQTTWebsocketListener {
         constructor() {
+            // the port where our local websocket runs
+            // local port probably makes problems when we want to test on android/ios
             this.conn = new WebSocket('ws://localhost:9090');
             this.conn.onopen = () => {
                 console.log("Connected to MQTT WebSocket");
             };
+            // Listens to all the messages send from the websocket
+            // And sorts them by type
             this.conn.onmessage = (msg) => {
                 const data = JSON.parse(msg.data);
                 console.log("Got message", data);
@@ -561,6 +573,7 @@ var app = (function (Iota) {
                             console.log("Registered in Websocket with " + data.websocketId);
                             break;
                         case "updateBalance":
+                            // changes amount with values that the websocket got from his mqtt subscription
                             console.log("Changing amount of " + data.address + " to " + data.amount);
                             addBalanceToAddress(data.address, data.amount);
                             break;
@@ -582,12 +595,15 @@ var app = (function (Iota) {
                 console.log("Got error", err);
             };
         }
+        // sends to the websocket that it should add a subscription for the address
+        // when now a amount change happens it will be send back to the client above
         addSubscription(addressHash) {
             this.conn.send(JSON.stringify({
                 type: "subscribe",
                 address: addressHash
             }));
         }
+        // sends to the websocket that it should remove a subscription for the address
         removeSubscription(addressHash) {
             this.conn.send(JSON.stringify({
                 type: "unsubscribe",
@@ -597,20 +613,24 @@ var app = (function (Iota) {
     }
     const MQTTListener = new MQTTWebsocketListener();
 
-    /* src\AddressItem.svelte generated by Svelte v3.44.0 */
+    /* src\views\AddressItem.svelte generated by Svelte v3.44.0 */
 
-    const { console: console_1$1 } = globals;
-    const file$3 = "src\\AddressItem.svelte";
+    const { console: console_1 } = globals;
+    const file$4 = "src\\views\\AddressItem.svelte";
 
-    function create_fragment$3(ctx) {
+    function create_fragment$4(ctx) {
     	let ion_item_sliding;
     	let ion_item;
     	let ion_label0;
     	let t0;
     	let t1;
     	let ion_label1;
+    	let t2_value = calculateBalanceDisplay(/*iotaBalance*/ ctx[1], /*$chosenBalanceType*/ ctx[3]) + "";
     	let t2;
     	let t3;
+    	let t4;
+    	let ion_label1_color_value;
+    	let t5;
     	let ion_item_options;
     	let ion_item_option;
     	let mounted;
@@ -624,18 +644,24 @@ var app = (function (Iota) {
     			t0 = text(/*addressHash*/ ctx[0]);
     			t1 = space();
     			ion_label1 = element("ion-label");
-    			t2 = text(/*iotaBalance*/ ctx[1]);
+    			t2 = text(t2_value);
     			t3 = space();
+    			t4 = text(/*$chosenBalanceType*/ ctx[3]);
+    			t5 = space();
     			ion_item_options = element("ion-item-options");
     			ion_item_option = element("ion-item-option");
-    			ion_item_option.textContent = "Unread";
-    			add_location(ion_label0, file$3, 15, 8, 462);
-    			add_location(ion_label1, file$3, 16, 8, 509);
-    			add_location(ion_item, file$3, 14, 4, 442);
-    			add_location(ion_item_option, file$3, 19, 8, 609);
+    			ion_item_option.textContent = "Delete";
+    			set_custom_element_data(ion_label0, "class", "ion-text-center");
+    			add_location(ion_label0, file$4, 26, 8, 915);
+    			set_custom_element_data(ion_label1, "color", ion_label1_color_value = /*onUpdate*/ ctx[2] ? 'tertiary' : '');
+    			set_custom_element_data(ion_label1, "class", "ion-text-center");
+    			add_location(ion_label1, file$4, 27, 8, 987);
+    			add_location(ion_item, file$4, 25, 4, 895);
+    			set_custom_element_data(ion_item_option, "color", "danger");
+    			add_location(ion_item_option, file$4, 30, 8, 1209);
     			set_custom_element_data(ion_item_options, "side", "end");
-    			add_location(ion_item_options, file$3, 18, 4, 570);
-    			add_location(ion_item_sliding, file$3, 13, 0, 418);
+    			add_location(ion_item_options, file$4, 29, 4, 1169);
+    			add_location(ion_item_sliding, file$4, 24, 0, 871);
     		},
     		l: function claim(nodes) {
     			throw new Error("options.hydrate only works if the component was compiled with the `hydratable: true` option");
@@ -648,18 +674,25 @@ var app = (function (Iota) {
     			append_dev(ion_item, t1);
     			append_dev(ion_item, ion_label1);
     			append_dev(ion_label1, t2);
-    			append_dev(ion_item_sliding, t3);
+    			append_dev(ion_label1, t3);
+    			append_dev(ion_label1, t4);
+    			append_dev(ion_item_sliding, t5);
     			append_dev(ion_item_sliding, ion_item_options);
     			append_dev(ion_item_options, ion_item_option);
 
     			if (!mounted) {
-    				dispose = listen_dev(ion_item_option, "click", /*click_handler*/ ctx[3], false, false, false);
+    				dispose = listen_dev(ion_item_option, "click", /*click_handler*/ ctx[5], false, false, false);
     				mounted = true;
     			}
     		},
     		p: function update(ctx, [dirty]) {
     			if (dirty & /*addressHash*/ 1) set_data_dev(t0, /*addressHash*/ ctx[0]);
-    			if (dirty & /*iotaBalance*/ 2) set_data_dev(t2, /*iotaBalance*/ ctx[1]);
+    			if (dirty & /*iotaBalance, $chosenBalanceType*/ 10 && t2_value !== (t2_value = calculateBalanceDisplay(/*iotaBalance*/ ctx[1], /*$chosenBalanceType*/ ctx[3]) + "")) set_data_dev(t2, t2_value);
+    			if (dirty & /*$chosenBalanceType*/ 8) set_data_dev(t4, /*$chosenBalanceType*/ ctx[3]);
+
+    			if (dirty & /*onUpdate*/ 4 && ion_label1_color_value !== (ion_label1_color_value = /*onUpdate*/ ctx[2] ? 'tertiary' : '')) {
+    				set_custom_element_data(ion_label1, "color", ion_label1_color_value);
+    			}
     		},
     		i: noop,
     		o: noop,
@@ -672,7 +705,7 @@ var app = (function (Iota) {
 
     	dispatch_dev("SvelteRegisterBlock", {
     		block,
-    		id: create_fragment$3.name,
+    		id: create_fragment$4.name,
     		type: "component",
     		source: "",
     		ctx
@@ -681,23 +714,39 @@ var app = (function (Iota) {
     	return block;
     }
 
-    function instance$3($$self, $$props, $$invalidate) {
+    function instance$4($$self, $$props, $$invalidate) {
+    	let $chosenBalanceType;
+    	validate_store(chosenBalanceType, 'chosenBalanceType');
+    	component_subscribe($$self, chosenBalanceType, $$value => $$invalidate(3, $chosenBalanceType = $$value));
     	let { $$slots: slots = {}, $$scope } = $$props;
     	validate_slots('AddressItem', slots, []);
-    	let { addressHash } = $$props;
-    	let { iotaBalance } = $$props;
-    	const dispatch = createEventDispatcher();
+    	let { addressHash = '' } = $$props;
+    	let { iotaBalance = 0 } = $$props;
+    	let onUpdate = false;
 
-    	async function remove() {
-    		console.log("removing" + addressHash);
+    	function remove() {
+    		console.log("removing address: " + addressHash);
     		MQTTListener.removeSubscription(addressHash);
-    		dispatch('remove', addressHash);
+    		removeAddress(addressHash);
+    	}
+
+    	// changed the color to blue for a short time when value changes
+    	function onBalanceChanged(newBalance) {
+    		console.log("Balance from address " + addressHash + " changed to " + newBalance);
+    		$$invalidate(2, onUpdate = true);
+
+    		setTimeout(
+    			() => {
+    				$$invalidate(2, onUpdate = false);
+    			},
+    			1000
+    		);
     	}
 
     	const writable_props = ['addressHash', 'iotaBalance'];
 
     	Object.keys($$props).forEach(key => {
-    		if (!~writable_props.indexOf(key) && key.slice(0, 2) !== '$$' && key !== 'slot') console_1$1.warn(`<AddressItem> was created with unknown prop '${key}'`);
+    		if (!~writable_props.indexOf(key) && key.slice(0, 2) !== '$$' && key !== 'slot') console_1.warn(`<AddressItem> was created with unknown prop '${key}'`);
     	});
 
     	const click_handler = () => remove();
@@ -708,48 +757,51 @@ var app = (function (Iota) {
     	};
 
     	$$self.$capture_state = () => ({
+    		calculateBalanceDisplay,
+    		chosenBalanceType,
+    		MQTTListener,
+    		removeAddress,
     		addressHash,
     		iotaBalance,
-    		createEventDispatcher,
-    		MQTTListener,
-    		dispatch,
-    		remove
+    		onUpdate,
+    		remove,
+    		onBalanceChanged,
+    		$chosenBalanceType
     	});
 
     	$$self.$inject_state = $$props => {
     		if ('addressHash' in $$props) $$invalidate(0, addressHash = $$props.addressHash);
     		if ('iotaBalance' in $$props) $$invalidate(1, iotaBalance = $$props.iotaBalance);
+    		if ('onUpdate' in $$props) $$invalidate(2, onUpdate = $$props.onUpdate);
     	};
 
     	if ($$props && "$$inject" in $$props) {
     		$$self.$inject_state($$props.$$inject);
     	}
 
-    	return [addressHash, iotaBalance, remove, click_handler];
+    	$$self.$$.update = () => {
+    		if ($$self.$$.dirty & /*iotaBalance*/ 2) {
+    			// listens to balance changes
+    			{
+    				onBalanceChanged(iotaBalance);
+    			}
+    		}
+    	};
+
+    	return [addressHash, iotaBalance, onUpdate, $chosenBalanceType, remove, click_handler];
     }
 
     class AddressItem extends SvelteComponentDev {
     	constructor(options) {
     		super(options);
-    		init(this, options, instance$3, create_fragment$3, safe_not_equal, { addressHash: 0, iotaBalance: 1 });
+    		init(this, options, instance$4, create_fragment$4, safe_not_equal, { addressHash: 0, iotaBalance: 1 });
 
     		dispatch_dev("SvelteRegisterComponent", {
     			component: this,
     			tagName: "AddressItem",
     			options,
-    			id: create_fragment$3.name
+    			id: create_fragment$4.name
     		});
-
-    		const { ctx } = this.$$;
-    		const props = options.props || {};
-
-    		if (/*addressHash*/ ctx[0] === undefined && !('addressHash' in props)) {
-    			console_1$1.warn("<AddressItem> was created without expected prop 'addressHash'");
-    		}
-
-    		if (/*iotaBalance*/ ctx[1] === undefined && !('iotaBalance' in props)) {
-    			console_1$1.warn("<AddressItem> was created without expected prop 'iotaBalance'");
-    		}
     	}
 
     	get addressHash() {
@@ -769,29 +821,27 @@ var app = (function (Iota) {
     	}
     }
 
-    /* src\AddressList.svelte generated by Svelte v3.44.0 */
-    const file$2 = "src\\AddressList.svelte";
+    /* src\views\AddressList.svelte generated by Svelte v3.44.0 */
+    const file$3 = "src\\views\\AddressList.svelte";
 
     function get_each_context(ctx, list, i) {
     	const child_ctx = ctx.slice();
-    	child_ctx[3] = list[i];
+    	child_ctx[1] = list[i];
     	return child_ctx;
     }
 
-    // (20:4) {#each $addresses as address}
+    // (7:4) {#each $addresses as address}
     function create_each_block(ctx) {
     	let addressitem;
     	let current;
 
     	addressitem = new AddressItem({
     			props: {
-    				addressHash: /*address*/ ctx[3].addressHash,
-    				iotaBalance: /*address*/ ctx[3].balance
+    				addressHash: /*address*/ ctx[1].addressHash,
+    				iotaBalance: /*address*/ ctx[1].balance
     			},
     			$$inline: true
     		});
-
-    	addressitem.$on("remove", /*remove_handler*/ ctx[2]);
 
     	const block = {
     		c: function create() {
@@ -803,8 +853,8 @@ var app = (function (Iota) {
     		},
     		p: function update(ctx, dirty) {
     			const addressitem_changes = {};
-    			if (dirty & /*$addresses*/ 1) addressitem_changes.addressHash = /*address*/ ctx[3].addressHash;
-    			if (dirty & /*$addresses*/ 1) addressitem_changes.iotaBalance = /*address*/ ctx[3].balance;
+    			if (dirty & /*$addresses*/ 1) addressitem_changes.addressHash = /*address*/ ctx[1].addressHash;
+    			if (dirty & /*$addresses*/ 1) addressitem_changes.iotaBalance = /*address*/ ctx[1].balance;
     			addressitem.$set(addressitem_changes);
     		},
     		i: function intro(local) {
@@ -825,14 +875,14 @@ var app = (function (Iota) {
     		block,
     		id: create_each_block.name,
     		type: "each",
-    		source: "(20:4) {#each $addresses as address}",
+    		source: "(7:4) {#each $addresses as address}",
     		ctx
     	});
 
     	return block;
     }
 
-    function create_fragment$2(ctx) {
+    function create_fragment$3(ctx) {
     	let ion_list;
     	let current;
     	let each_value = /*$addresses*/ ctx[0];
@@ -855,7 +905,7 @@ var app = (function (Iota) {
     				each_blocks[i].c();
     			}
 
-    			add_location(ion_list, file$2, 17, 0, 384);
+    			add_location(ion_list, file$3, 5, 0, 140);
     		},
     		l: function claim(nodes) {
     			throw new Error("options.hydrate only works if the component was compiled with the `hydratable: true` option");
@@ -870,7 +920,7 @@ var app = (function (Iota) {
     			current = true;
     		},
     		p: function update(ctx, [dirty]) {
-    			if (dirty & /*$addresses, removeItem*/ 3) {
+    			if (dirty & /*$addresses*/ 1) {
     				each_value = /*$addresses*/ ctx[0];
     				validate_each_argument(each_value);
     				let i;
@@ -924,7 +974,7 @@ var app = (function (Iota) {
 
     	dispatch_dev("SvelteRegisterBlock", {
     		block,
-    		id: create_fragment$2.name,
+    		id: create_fragment$3.name,
     		type: "component",
     		source: "",
     		ctx
@@ -933,65 +983,78 @@ var app = (function (Iota) {
     	return block;
     }
 
-    function instance$2($$self, $$props, $$invalidate) {
+    function instance$3($$self, $$props, $$invalidate) {
     	let $addresses;
     	validate_store(addresses, 'addresses');
     	component_subscribe($$self, addresses, $$value => $$invalidate(0, $addresses = $$value));
     	let { $$slots: slots = {}, $$scope } = $$props;
     	validate_slots('AddressList', slots, []);
-
-    	for (let i = 0; i < 1; i++) {
-    		try {
-    			addAddress({ addressHash: 'dsad', balance: 1212 });
-    		} catch(e) {
-    			alert(e);
-    		}
-    	}
-
-    	function removeItem(hashAddress) {
-    		removeAddress(hashAddress);
-    	}
-
     	const writable_props = [];
 
     	Object.keys($$props).forEach(key => {
     		if (!~writable_props.indexOf(key) && key.slice(0, 2) !== '$$' && key !== 'slot') console.warn(`<AddressList> was created with unknown prop '${key}'`);
     	});
 
-    	const remove_handler = e => removeItem(e.detail);
-
-    	$$self.$capture_state = () => ({
-    		AddressItem,
-    		addAddress,
-    		addresses,
-    		removeAddress,
-    		removeItem,
-    		$addresses
-    	});
-
-    	return [$addresses, removeItem, remove_handler];
+    	$$self.$capture_state = () => ({ AddressItem, addresses, $addresses });
+    	return [$addresses];
     }
 
     class AddressList extends SvelteComponentDev {
     	constructor(options) {
     		super(options);
-    		init(this, options, instance$2, create_fragment$2, safe_not_equal, {});
+    		init(this, options, instance$3, create_fragment$3, safe_not_equal, {});
 
     		dispatch_dev("SvelteRegisterComponent", {
     			component: this,
     			tagName: "AddressList",
     			options,
-    			id: create_fragment$2.name
+    			id: create_fragment$3.name
     		});
     	}
     }
 
-    /* src\EnterAddressField.svelte generated by Svelte v3.44.0 */
-    const file$1 = "src\\EnterAddressField.svelte";
+    const client = new Iota__default["default"].SingleNodeClient("https://api.lb-0.h.chrysalis-devnet.iota.cafe/");
+    // info function to see if client connection is available
+    async function checkHealth() {
+        const health = await client.health();
+        console.log(health ? "Connected successfully with iota dev network" : "Problems with connecting to iota dev network");
+    }
+    // info function that shows teh attributes of the connected node
+    async function checkInfo() {
+        const info = await client.info();
+        console.log("Node Info");
+        console.log("\tName:", info.name);
+        console.log("\tVersion:", info.version);
+        console.log("\tIs Healthy:", info.isHealthy);
+        console.log("\tNetwork Id:", info.networkId);
+        console.log("\tLatest Milestone Index:", info.latestMilestoneIndex);
+        console.log("\tConfirmed Milestone Index:", info.confirmedMilestoneIndex);
+        console.log("\tPruning Index:", info.pruningIndex);
+        console.log("\tFeatures:", info.features);
+        console.log("\tMin PoW Score:", info.minPoWScore);
+    }
+    // checks the balance of the iota address with the iota singleNodeClient
+    async function checkBalance(addressHash) {
+        try {
+            const address = await client.address(addressHash);
+            console.log("Address");
+            console.log("\tAddress:", address.address);
+            console.log("\tBalance:", address.balance);
+            return address.balance;
+        }
+        catch (e) {
+            throw Error("Invalid Address, pls try another");
+        }
+    }
 
-    function create_fragment$1(ctx) {
+    /* src\views\EnterAddressField.svelte generated by Svelte v3.44.0 */
+    const file$2 = "src\\views\\EnterAddressField.svelte";
+
+    function create_fragment$2(ctx) {
     	let ion_item;
     	let input;
+    	let input_class_value;
+    	let input_placeholder_value;
     	let t;
     	let ion_button;
     	let ion_icon;
@@ -1005,15 +1068,19 @@ var app = (function (Iota) {
     			t = space();
     			ion_button = element("ion-button");
     			ion_icon = element("ion-icon");
-    			attr_dev(input, "class", "InputButton svelte-snlv3o");
-    			attr_dev(input, "placeholder", "Enter Address");
-    			add_location(input, file$1, 34, 4, 871);
+    			attr_dev(input, "class", input_class_value = "InputButton " + (/*showError*/ ctx[1] ? 'Error' : '') + " svelte-238qgp");
+
+    			attr_dev(input, "placeholder", input_placeholder_value = /*showError*/ ctx[1]
+    			? /*errorMessage*/ ctx[2]
+    			: 'Enter Address');
+
+    			add_location(input, file$2, 48, 4, 1341);
     			set_custom_element_data(ion_icon, "slot", "icon-only");
     			set_custom_element_data(ion_icon, "name", "add-circle-sharp");
-    			add_location(ion_icon, file$1, 36, 8, 1032);
+    			add_location(ion_icon, file$2, 50, 8, 1553);
     			set_custom_element_data(ion_button, "size", "middle");
-    			add_location(ion_button, file$1, 35, 4, 960);
-    			add_location(ion_item, file$1, 32, 0, 724);
+    			add_location(ion_button, file$2, 49, 4, 1481);
+    			add_location(ion_item, file$2, 46, 0, 1194);
     		},
     		l: function claim(nodes) {
     			throw new Error("options.hydrate only works if the component was compiled with the `hydratable: true` option");
@@ -1028,14 +1095,24 @@ var app = (function (Iota) {
 
     			if (!mounted) {
     				dispose = [
-    					listen_dev(input, "input", /*input_input_handler*/ ctx[2]),
-    					listen_dev(ion_button, "click", /*click_handler*/ ctx[3], false, false, false)
+    					listen_dev(input, "input", /*input_input_handler*/ ctx[4]),
+    					listen_dev(ion_button, "click", /*click_handler*/ ctx[5], false, false, false)
     				];
 
     				mounted = true;
     			}
     		},
     		p: function update(ctx, [dirty]) {
+    			if (dirty & /*showError*/ 2 && input_class_value !== (input_class_value = "InputButton " + (/*showError*/ ctx[1] ? 'Error' : '') + " svelte-238qgp")) {
+    				attr_dev(input, "class", input_class_value);
+    			}
+
+    			if (dirty & /*showError, errorMessage*/ 6 && input_placeholder_value !== (input_placeholder_value = /*showError*/ ctx[1]
+    			? /*errorMessage*/ ctx[2]
+    			: 'Enter Address')) {
+    				attr_dev(input, "placeholder", input_placeholder_value);
+    			}
+
     			if (dirty & /*currentSearch*/ 1 && input.value !== /*currentSearch*/ ctx[0]) {
     				set_input_value(input, /*currentSearch*/ ctx[0]);
     			}
@@ -1051,7 +1128,7 @@ var app = (function (Iota) {
 
     	dispatch_dev("SvelteRegisterBlock", {
     		block,
-    		id: create_fragment$1.name,
+    		id: create_fragment$2.name,
     		type: "component",
     		source: "",
     		ctx
@@ -1060,28 +1137,41 @@ var app = (function (Iota) {
     	return block;
     }
 
-    function instance$1($$self, $$props, $$invalidate) {
+    function instance$2($$self, $$props, $$invalidate) {
     	let { $$slots: slots = {}, $$scope } = $$props;
     	validate_slots('EnterAddressField', slots, []);
     	let currentSearch;
+    	let showError = false;
+    	let errorMessage = "";
 
     	async function enterNewAddress() {
     		let balance;
 
-    		// try catch needs to be different
     		try {
     			balance = await checkBalance(currentSearch);
-    		} catch(e) {
-    			alert("Could not find Address");
-    		}
-
-    		try {
     			addAddress({ addressHash: currentSearch, balance });
     			MQTTListener.addSubscription(currentSearch);
     			$$invalidate(0, currentSearch = '');
+
+    			if (showError) {
+    				noErrorAnymore();
+    			}
     		} catch(e) {
-    			alert(e);
+    			$$invalidate(0, currentSearch = '');
+    			throwError(e.message);
     		}
+    	}
+
+    	// sets back the displaying of the error
+    	function noErrorAnymore() {
+    		$$invalidate(1, showError = false);
+    		$$invalidate(2, errorMessage = '');
+    	}
+
+    	// changes showError so an error will be shown inside the input field
+    	function throwError(errorMsg) {
+    		$$invalidate(1, showError = true);
+    		$$invalidate(2, errorMessage = errorMsg);
     	}
 
     	const writable_props = [];
@@ -1102,38 +1192,283 @@ var app = (function (Iota) {
     		checkBalance,
     		MQTTListener,
     		currentSearch,
-    		enterNewAddress
+    		showError,
+    		errorMessage,
+    		enterNewAddress,
+    		noErrorAnymore,
+    		throwError
     	});
 
     	$$self.$inject_state = $$props => {
     		if ('currentSearch' in $$props) $$invalidate(0, currentSearch = $$props.currentSearch);
+    		if ('showError' in $$props) $$invalidate(1, showError = $$props.showError);
+    		if ('errorMessage' in $$props) $$invalidate(2, errorMessage = $$props.errorMessage);
     	};
 
     	if ($$props && "$$inject" in $$props) {
     		$$self.$inject_state($$props.$$inject);
     	}
 
-    	return [currentSearch, enterNewAddress, input_input_handler, click_handler];
+    	return [
+    		currentSearch,
+    		showError,
+    		errorMessage,
+    		enterNewAddress,
+    		input_input_handler,
+    		click_handler
+    	];
     }
 
     class EnterAddressField extends SvelteComponentDev {
+    	constructor(options) {
+    		super(options);
+    		init(this, options, instance$2, create_fragment$2, safe_not_equal, {});
+
+    		dispatch_dev("SvelteRegisterComponent", {
+    			component: this,
+    			tagName: "EnterAddressField",
+    			options,
+    			id: create_fragment$2.name
+    		});
+    	}
+    }
+
+    /* src\views\ChangeBalanceTypeToolBar.svelte generated by Svelte v3.44.0 */
+
+    const file$1 = "src\\views\\ChangeBalanceTypeToolBar.svelte";
+
+    function create_fragment$1(ctx) {
+    	let ion_toolbar;
+    	let ion_button0;
+    	let t0;
+    	let ion_button0_color_value;
+    	let t1;
+    	let ion_button1;
+    	let t2;
+    	let ion_button1_color_value;
+    	let t3;
+    	let ion_button2;
+    	let t4;
+    	let ion_button2_color_value;
+    	let t5;
+    	let ion_button3;
+    	let t6;
+    	let ion_button3_color_value;
+    	let t7;
+    	let ion_button4;
+    	let t8;
+    	let ion_button4_color_value;
+    	let t9;
+    	let ion_button5;
+    	let t10;
+    	let ion_button5_color_value;
+    	let mounted;
+    	let dispose;
+
+    	const block = {
+    		c: function create() {
+    			ion_toolbar = element("ion-toolbar");
+    			ion_button0 = element("ion-button");
+    			t0 = text(" i ");
+    			t1 = space();
+    			ion_button1 = element("ion-button");
+    			t2 = text("Ki");
+    			t3 = space();
+    			ion_button2 = element("ion-button");
+    			t4 = text("Mi");
+    			t5 = space();
+    			ion_button3 = element("ion-button");
+    			t6 = text("Gi");
+    			t7 = space();
+    			ion_button4 = element("ion-button");
+    			t8 = text("Ti");
+    			t9 = space();
+    			ion_button5 = element("ion-button");
+    			t10 = text("Ti");
+
+    			set_custom_element_data(ion_button0, "color", ion_button0_color_value = /*$chosenBalanceType*/ ctx[0] === BalanceChoosingType.I
+    			? "primary"
+    			: "secondary");
+
+    			add_location(ion_button0, file$1, 4, 4, 264);
+
+    			set_custom_element_data(ion_button1, "color", ion_button1_color_value = /*$chosenBalanceType*/ ctx[0] === BalanceChoosingType.KI
+    			? "primary"
+    			: "secondary");
+
+    			add_location(ion_button1, file$1, 8, 4, 482);
+
+    			set_custom_element_data(ion_button2, "color", ion_button2_color_value = /*$chosenBalanceType*/ ctx[0] === BalanceChoosingType.MI
+    			? "primary"
+    			: "secondary");
+
+    			add_location(ion_button2, file$1, 12, 4, 691);
+
+    			set_custom_element_data(ion_button3, "color", ion_button3_color_value = /*$chosenBalanceType*/ ctx[0] === BalanceChoosingType.GI
+    			? "primary"
+    			: "secondary");
+
+    			add_location(ion_button3, file$1, 16, 4, 900);
+
+    			set_custom_element_data(ion_button4, "color", ion_button4_color_value = /*$chosenBalanceType*/ ctx[0] === BalanceChoosingType.TI
+    			? "primary"
+    			: "secondary");
+
+    			add_location(ion_button4, file$1, 20, 4, 1109);
+
+    			set_custom_element_data(ion_button5, "color", ion_button5_color_value = /*$chosenBalanceType*/ ctx[0] === BalanceChoosingType.PI
+    			? "primary"
+    			: "secondary");
+
+    			add_location(ion_button5, file$1, 24, 4, 1318);
+    			add_location(ion_toolbar, file$1, 3, 0, 245);
+    		},
+    		l: function claim(nodes) {
+    			throw new Error("options.hydrate only works if the component was compiled with the `hydratable: true` option");
+    		},
+    		m: function mount(target, anchor) {
+    			insert_dev(target, ion_toolbar, anchor);
+    			append_dev(ion_toolbar, ion_button0);
+    			append_dev(ion_button0, t0);
+    			append_dev(ion_toolbar, t1);
+    			append_dev(ion_toolbar, ion_button1);
+    			append_dev(ion_button1, t2);
+    			append_dev(ion_toolbar, t3);
+    			append_dev(ion_toolbar, ion_button2);
+    			append_dev(ion_button2, t4);
+    			append_dev(ion_toolbar, t5);
+    			append_dev(ion_toolbar, ion_button3);
+    			append_dev(ion_button3, t6);
+    			append_dev(ion_toolbar, t7);
+    			append_dev(ion_toolbar, ion_button4);
+    			append_dev(ion_button4, t8);
+    			append_dev(ion_toolbar, t9);
+    			append_dev(ion_toolbar, ion_button5);
+    			append_dev(ion_button5, t10);
+
+    			if (!mounted) {
+    				dispose = [
+    					listen_dev(ion_button0, "click", /*click_handler*/ ctx[1], false, false, false),
+    					listen_dev(ion_button1, "click", /*click_handler_1*/ ctx[2], false, false, false),
+    					listen_dev(ion_button2, "click", /*click_handler_2*/ ctx[3], false, false, false),
+    					listen_dev(ion_button3, "click", /*click_handler_3*/ ctx[4], false, false, false),
+    					listen_dev(ion_button4, "click", /*click_handler_4*/ ctx[5], false, false, false),
+    					listen_dev(ion_button5, "click", /*click_handler_5*/ ctx[6], false, false, false)
+    				];
+
+    				mounted = true;
+    			}
+    		},
+    		p: function update(ctx, [dirty]) {
+    			if (dirty & /*$chosenBalanceType*/ 1 && ion_button0_color_value !== (ion_button0_color_value = /*$chosenBalanceType*/ ctx[0] === BalanceChoosingType.I
+    			? "primary"
+    			: "secondary")) {
+    				set_custom_element_data(ion_button0, "color", ion_button0_color_value);
+    			}
+
+    			if (dirty & /*$chosenBalanceType*/ 1 && ion_button1_color_value !== (ion_button1_color_value = /*$chosenBalanceType*/ ctx[0] === BalanceChoosingType.KI
+    			? "primary"
+    			: "secondary")) {
+    				set_custom_element_data(ion_button1, "color", ion_button1_color_value);
+    			}
+
+    			if (dirty & /*$chosenBalanceType*/ 1 && ion_button2_color_value !== (ion_button2_color_value = /*$chosenBalanceType*/ ctx[0] === BalanceChoosingType.MI
+    			? "primary"
+    			: "secondary")) {
+    				set_custom_element_data(ion_button2, "color", ion_button2_color_value);
+    			}
+
+    			if (dirty & /*$chosenBalanceType*/ 1 && ion_button3_color_value !== (ion_button3_color_value = /*$chosenBalanceType*/ ctx[0] === BalanceChoosingType.GI
+    			? "primary"
+    			: "secondary")) {
+    				set_custom_element_data(ion_button3, "color", ion_button3_color_value);
+    			}
+
+    			if (dirty & /*$chosenBalanceType*/ 1 && ion_button4_color_value !== (ion_button4_color_value = /*$chosenBalanceType*/ ctx[0] === BalanceChoosingType.TI
+    			? "primary"
+    			: "secondary")) {
+    				set_custom_element_data(ion_button4, "color", ion_button4_color_value);
+    			}
+
+    			if (dirty & /*$chosenBalanceType*/ 1 && ion_button5_color_value !== (ion_button5_color_value = /*$chosenBalanceType*/ ctx[0] === BalanceChoosingType.PI
+    			? "primary"
+    			: "secondary")) {
+    				set_custom_element_data(ion_button5, "color", ion_button5_color_value);
+    			}
+    		},
+    		i: noop,
+    		o: noop,
+    		d: function destroy(detaching) {
+    			if (detaching) detach_dev(ion_toolbar);
+    			mounted = false;
+    			run_all(dispose);
+    		}
+    	};
+
+    	dispatch_dev("SvelteRegisterBlock", {
+    		block,
+    		id: create_fragment$1.name,
+    		type: "component",
+    		source: "",
+    		ctx
+    	});
+
+    	return block;
+    }
+
+    function instance$1($$self, $$props, $$invalidate) {
+    	let $chosenBalanceType;
+    	validate_store(chosenBalanceType, 'chosenBalanceType');
+    	component_subscribe($$self, chosenBalanceType, $$value => $$invalidate(0, $chosenBalanceType = $$value));
+    	let { $$slots: slots = {}, $$scope } = $$props;
+    	validate_slots('ChangeBalanceTypeToolBar', slots, []);
+    	const writable_props = [];
+
+    	Object.keys($$props).forEach(key => {
+    		if (!~writable_props.indexOf(key) && key.slice(0, 2) !== '$$' && key !== 'slot') console.warn(`<ChangeBalanceTypeToolBar> was created with unknown prop '${key}'`);
+    	});
+
+    	const click_handler = () => changeChosenBalanceType(BalanceChoosingType.I);
+    	const click_handler_1 = () => changeChosenBalanceType(BalanceChoosingType.KI);
+    	const click_handler_2 = () => changeChosenBalanceType(BalanceChoosingType.MI);
+    	const click_handler_3 = () => changeChosenBalanceType(BalanceChoosingType.GI);
+    	const click_handler_4 = () => changeChosenBalanceType(BalanceChoosingType.TI);
+    	const click_handler_5 = () => changeChosenBalanceType(BalanceChoosingType.PI);
+
+    	$$self.$capture_state = () => ({
+    		BalanceChoosingType,
+    		changeChosenBalanceType,
+    		chosenBalanceType,
+    		$chosenBalanceType
+    	});
+
+    	return [
+    		$chosenBalanceType,
+    		click_handler,
+    		click_handler_1,
+    		click_handler_2,
+    		click_handler_3,
+    		click_handler_4,
+    		click_handler_5
+    	];
+    }
+
+    class ChangeBalanceTypeToolBar extends SvelteComponentDev {
     	constructor(options) {
     		super(options);
     		init(this, options, instance$1, create_fragment$1, safe_not_equal, {});
 
     		dispatch_dev("SvelteRegisterComponent", {
     			component: this,
-    			tagName: "EnterAddressField",
+    			tagName: "ChangeBalanceTypeToolBar",
     			options,
     			id: create_fragment$1.name
     		});
     	}
     }
 
-    /* src\App.svelte generated by Svelte v3.44.0 */
-
-    const { console: console_1 } = globals;
-    const file = "src\\App.svelte";
+    /* src\views\App.svelte generated by Svelte v3.44.0 */
+    const file = "src\\views\\App.svelte";
 
     function create_fragment(ctx) {
     	let main;
@@ -1146,15 +1481,19 @@ var app = (function (Iota) {
     	let t1;
     	let enteraddressfield;
     	let t2;
+    	let ion_item;
+    	let ion_label0;
+    	let t4;
+    	let ion_label1;
+    	let t6;
     	let addresslist;
-    	let t3;
+    	let t7;
     	let ion_footer;
-    	let ion_button;
+    	let changebalancetype;
     	let current;
-    	let mounted;
-    	let dispose;
     	enteraddressfield = new EnterAddressField({ $$inline: true });
     	addresslist = new AddressList({ $$inline: true });
+    	changebalancetype = new ChangeBalanceTypeToolBar({ $$inline: true });
 
     	const block = {
     		c: function create() {
@@ -1168,22 +1507,30 @@ var app = (function (Iota) {
     			t1 = space();
     			create_component(enteraddressfield.$$.fragment);
     			t2 = space();
+    			ion_item = element("ion-item");
+    			ion_label0 = element("ion-label");
+    			ion_label0.textContent = "Address";
+    			t4 = space();
+    			ion_label1 = element("ion-label");
+    			ion_label1.textContent = "Balance";
+    			t6 = space();
     			create_component(addresslist.$$.fragment);
-    			t3 = space();
+    			t7 = space();
     			ion_footer = element("ion-footer");
-    			ion_button = element("ion-button");
-    			ion_button.textContent = "Greet";
-    			add_location(ion_title, file, 18, 5, 595);
-    			add_location(ion_toolbar, file, 17, 4, 576);
-    			add_location(ion_header, file, 16, 3, 559);
-    			add_location(ion_content, file, 15, 2, 542);
-    			set_custom_element_data(ion_button, "color", "secondary");
-    			set_custom_element_data(ion_button, "expand", "block");
-    			add_location(ion_button, file, 25, 3, 738);
-    			add_location(ion_footer, file, 24, 2, 722);
-    			add_location(ion_app, file, 14, 1, 530);
-    			attr_dev(main, "class", "svelte-1tky8bj");
-    			add_location(main, file, 13, 0, 522);
+    			create_component(changebalancetype.$$.fragment);
+    			add_location(ion_title, file, 33, 20, 807);
+    			add_location(ion_toolbar, file, 32, 16, 773);
+    			add_location(ion_header, file, 31, 12, 744);
+    			set_custom_element_data(ion_label0, "class", "ion-text-center");
+    			add_location(ion_label0, file, 38, 16, 966);
+    			set_custom_element_data(ion_label1, "class", "ion-text-center");
+    			add_location(ion_label1, file, 39, 16, 1038);
+    			add_location(ion_item, file, 37, 12, 939);
+    			add_location(ion_content, file, 30, 8, 718);
+    			add_location(ion_footer, file, 43, 8, 1176);
+    			add_location(ion_app, file, 29, 4, 700);
+    			attr_dev(main, "class", "svelte-92w3al");
+    			add_location(main, file, 28, 0, 689);
     		},
     		l: function claim(nodes) {
     			throw new Error("options.hydrate only works if the component was compiled with the `hydratable: true` option");
@@ -1199,16 +1546,16 @@ var app = (function (Iota) {
     			append_dev(ion_content, t1);
     			mount_component(enteraddressfield, ion_content, null);
     			append_dev(ion_content, t2);
+    			append_dev(ion_content, ion_item);
+    			append_dev(ion_item, ion_label0);
+    			append_dev(ion_item, t4);
+    			append_dev(ion_item, ion_label1);
+    			append_dev(ion_content, t6);
     			mount_component(addresslist, ion_content, null);
-    			append_dev(ion_app, t3);
+    			append_dev(ion_app, t7);
     			append_dev(ion_app, ion_footer);
-    			append_dev(ion_footer, ion_button);
+    			mount_component(changebalancetype, ion_footer, null);
     			current = true;
-
-    			if (!mounted) {
-    				dispose = listen_dev(ion_button, "click", /*greet*/ ctx[1], false, false, false);
-    				mounted = true;
-    			}
     		},
     		p: function update(ctx, [dirty]) {
     			if (!current || dirty & /*name*/ 1) set_data_dev(t0, /*name*/ ctx[0]);
@@ -1217,19 +1564,20 @@ var app = (function (Iota) {
     			if (current) return;
     			transition_in(enteraddressfield.$$.fragment, local);
     			transition_in(addresslist.$$.fragment, local);
+    			transition_in(changebalancetype.$$.fragment, local);
     			current = true;
     		},
     		o: function outro(local) {
     			transition_out(enteraddressfield.$$.fragment, local);
     			transition_out(addresslist.$$.fragment, local);
+    			transition_out(changebalancetype.$$.fragment, local);
     			current = false;
     		},
     		d: function destroy(detaching) {
     			if (detaching) detach_dev(main);
     			destroy_component(enteraddressfield);
     			destroy_component(addresslist);
-    			mounted = false;
-    			dispose();
+    			destroy_component(changebalancetype);
     		}
     	};
 
@@ -1248,13 +1596,10 @@ var app = (function (Iota) {
     	let { $$slots: slots = {}, $$scope } = $$props;
     	validate_slots('App', slots, []);
     	let { name } = $$props;
-    	const greet = () => alert('hi');
 
     	onMount(async () => {
     		// checks health and info of Iota connection
-    		console.log(await checkHealth()
-    		? "Connected successfully with iota dev network"
-    		: "Problems with connecting to iota dev network");
+    		await checkHealth();
 
     		await checkInfo();
     	});
@@ -1262,7 +1607,7 @@ var app = (function (Iota) {
     	const writable_props = ['name'];
 
     	Object.keys($$props).forEach(key => {
-    		if (!~writable_props.indexOf(key) && key.slice(0, 2) !== '$$' && key !== 'slot') console_1.warn(`<App> was created with unknown prop '${key}'`);
+    		if (!~writable_props.indexOf(key) && key.slice(0, 2) !== '$$' && key !== 'slot') console.warn(`<App> was created with unknown prop '${key}'`);
     	});
 
     	$$self.$$set = $$props => {
@@ -1275,8 +1620,8 @@ var app = (function (Iota) {
     		onMount,
     		checkHealth,
     		checkInfo,
-    		name,
-    		greet
+    		ChangeBalanceType: ChangeBalanceTypeToolBar,
+    		name
     	});
 
     	$$self.$inject_state = $$props => {
@@ -1287,7 +1632,7 @@ var app = (function (Iota) {
     		$$self.$inject_state($$props.$$inject);
     	}
 
-    	return [name, greet];
+    	return [name];
     }
 
     class App extends SvelteComponentDev {
@@ -1306,7 +1651,7 @@ var app = (function (Iota) {
     		const props = options.props || {};
 
     		if (/*name*/ ctx[0] === undefined && !('name' in props)) {
-    			console_1.warn("<App> was created without expected prop 'name'");
+    			console.warn("<App> was created without expected prop 'name'");
     		}
     	}
 
