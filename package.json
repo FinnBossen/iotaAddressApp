@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "android": "npm run build && npx cap open android",
+    "sync-android": "npx cap sync android",
     "build": "rollup -c",
     "dev": "rollup -c -w",
     "dev-with-websocket": "concurrently --kill-others \"npm run iota_websocket\" \"npm run dev\"",
