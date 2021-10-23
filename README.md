@@ -19,10 +19,11 @@ Start:
 
 To start the application you need to run the websocket and the application
 
-in the package json you can use the scripts that run bot concurrently:
+in the package json you can use the scripts that run both concurrently:
 
 dev-with-websocket or start-with-websocket
 
+but you need to install concurrently before that (npm install concurrently --save)
 
 Usage of App:
 
