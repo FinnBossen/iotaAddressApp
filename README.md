@@ -1,8 +1,8 @@
 # IOTA Address App
 
-A App developed with Svelte and Typescript.
+An App developed with Svelte and Typescript.
 For the Ionic UI components were used.
-You can add IOTA addresses from the devnet and they will be update through a mqtt connection that is maintained inside a websocket.
+You can add IOTA addresses from the devnet and they will be updated through a mqtt connection that is maintained inside a websocket.
 
 Example Addresses from the devnet.
 [
@@ -17,18 +17,18 @@ To give the addresses some iota you can use the faucet https://faucet.chrysalis-
 
 Start:
 
-To start the application you need to run the websocket and the application
+To start the application you need to run the websocket and the application.
 
-in the package json you can use the scripts that run both concurrently:
+In the package json you can use the scripts that run both concurrently:
 
 dev-with-websocket or start-with-websocket
 
-but you need to install concurrently before that (npm install concurrently --save)
+But you need to install concurrently before that (npm install concurrently --save)
 
 Usage of App:
 
-The added addresses can be deleted by swuping left and then clicking on the delete button.
-Underneath are several buttons where the value type (IOTA,MIOTA...) can be selected, the display will be changed according to that.
+The added addresses can be deleted by swiping left and then clicking on the delete button.
+Underneath are several buttons where the value type (IOTA, MIOTA...) can be selected, the display will be changed according to that.
 
 ![image](https://user-images.githubusercontent.com/40921409/138539856-01217bba-8938-4c98-abeb-7220bf0a2e5e.png)
 
