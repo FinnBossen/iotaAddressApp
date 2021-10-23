@@ -29,6 +29,6 @@
     </ion-button>
     <ion-button color={$chosenBalanceType === BalanceChoosingType.PI ? "primary" : "secondary"}
                 on:click={()=>changeChosenBalanceType(BalanceChoosingType.PI)}>
-        Ti
+        Pi
     </ion-button>
 </ion-toolbar>

@@ -528,29 +528,29 @@ var app = (function (Iota) {
     const addresses = writable([]);
     // Adds address to the writable array addresses
     function addAddress(newAddress) {
-        addresses.update($address => {
-            const index = $address.findIndex((address => address.addressHash == newAddress.addressHash));
+        addresses.update($addresses => {
+            const index = $addresses.findIndex((address => address.addressHash == newAddress.addressHash));
             if (index > -1) {
                 throw new Error('Address is already listed');
             }
-            $address = [...$address, newAddress];
-            return $address;
+            $addresses = [...$addresses, newAddress];
+            return $addresses;
         });
     }
     // Removes address to the writable array addresses
     function removeAddress(removableAddressHash) {
-        addresses.update($address => {
-            $address = $address.filter(t => t.addressHash !== removableAddressHash);
-            return $address;
+        addresses.update($addresses => {
+            $addresses = $addresses.filter(t => t.addressHash !== removableAddressHash);
+            return $addresses;
         });
     }
     // Adds new Amount to address.balance, is called when mqtt amount change was triggered inside the websocket
     function addBalanceToAddress(addressHash, balance) {
-        addresses.update($address => {
-            const index = $address.findIndex((address => address.addressHash == addressHash));
-            $address[index].balance = $address[index].balance + balance;
-            $address = [...$address];
-            return $address;
+        addresses.update($addresses => {
+            const index = $addresses.findIndex((address => address.addressHash == addressHash));
+            $addresses[index].balance = $addresses[index].balance + balance;
+            $addresses = [...$addresses];
+            return $addresses;
         });
     }
 
@@ -1293,7 +1293,7 @@ var app = (function (Iota) {
     			t8 = text("Ti");
     			t9 = space();
     			ion_button5 = element("ion-button");
-    			t10 = text("Ti");
+    			t10 = text("Pi");
 
     			set_custom_element_data(ion_button0, "color", ion_button0_color_value = /*$chosenBalanceType*/ ctx[0] === BalanceChoosingType.I
     			? "primary"
