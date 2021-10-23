@@ -1,7 +1,7 @@
 # IOTA Address App
 
 A App developed with Svelte.
-You can add iota addresses from the devnet and they will be update through a mqtt connection that is maintained inside a websocket.
+You can add IOTA addresses from the devnet and they will be update through a mqtt connection that is maintained inside a websocket.
 
 Example Addresses from the devnet.
 [
