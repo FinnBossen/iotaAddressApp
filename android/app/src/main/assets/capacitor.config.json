@@ -1,0 +1,6 @@
+{
+	"appId": "com.iota.addressApp",
+	"appName": "iotaAddressApp",
+	"webDir": "public",
+	"bundledWebRuntime": false
+}
