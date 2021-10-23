@@ -8,6 +8,7 @@
     "build": "rollup -c",
     "dev": "rollup -c -w",
     "dev-with-websocket": "concurrently --kill-others \"npm run iota_websocket\" \"npm run dev\"",
+    "start-with-websocket": "concurrently --kill-others \"npm run iota_websocket\" \"npm run start\"",
     "start": "sirv public --no-clear",
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "iota_websocket": "npx tsc IotaWebsocket.ts && node IotaWebsocket.js",
