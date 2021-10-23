@@ -1,5 +1,5 @@
 
-(function(l, r) { if (!l || l.getElementById('livereloadscript')) return; r = l.createElement('script'); r.async = 1; r.src = '//' + (self.location.host || 'localhost').split(':')[0] + ':35730/livereload.js?snipver=1'; r.id = 'livereloadscript'; l.getElementsByTagName('head')[0].appendChild(r) })(self.document);
+(function(l, r) { if (!l || l.getElementById('livereloadscript')) return; r = l.createElement('script'); r.async = 1; r.src = '//' + (self.location.host || 'localhost').split(':')[0] + ':35729/livereload.js?snipver=1'; r.id = 'livereloadscript'; l.getElementsByTagName('head')[0].appendChild(r) })(self.document);
 var app = (function (Iota) {
     'use strict';
 
@@ -652,16 +652,16 @@ var app = (function (Iota) {
     			ion_item_option = element("ion-item-option");
     			ion_item_option.textContent = "Delete";
     			set_custom_element_data(ion_label0, "class", "ion-text-center");
-    			add_location(ion_label0, file$4, 26, 8, 915);
+    			add_location(ion_label0, file$4, 32, 8, 1133);
     			set_custom_element_data(ion_label1, "color", ion_label1_color_value = /*onUpdate*/ ctx[2] ? 'tertiary' : '');
     			set_custom_element_data(ion_label1, "class", "ion-text-center");
-    			add_location(ion_label1, file$4, 27, 8, 987);
-    			add_location(ion_item, file$4, 25, 4, 895);
+    			add_location(ion_label1, file$4, 33, 8, 1205);
+    			add_location(ion_item, file$4, 31, 4, 1113);
     			set_custom_element_data(ion_item_option, "color", "danger");
-    			add_location(ion_item_option, file$4, 30, 8, 1209);
+    			add_location(ion_item_option, file$4, 37, 8, 1447);
     			set_custom_element_data(ion_item_options, "side", "end");
-    			add_location(ion_item_options, file$4, 29, 4, 1169);
-    			add_location(ion_item_sliding, file$4, 24, 0, 871);
+    			add_location(ion_item_options, file$4, 36, 4, 1408);
+    			add_location(ion_item_sliding, file$4, 30, 0, 1089);
     		},
     		l: function claim(nodes) {
     			throw new Error("options.hydrate only works if the component was compiled with the `hydratable: true` option");
@@ -723,6 +723,7 @@ var app = (function (Iota) {
     	let { addressHash = '' } = $$props;
     	let { iotaBalance = 0 } = $$props;
     	let onUpdate = false;
+    	let lastHash;
 
     	function remove() {
     		console.log("removing address: " + addressHash);
@@ -732,6 +733,12 @@ var app = (function (Iota) {
 
     	// changed the color to blue for a short time when value changes
     	function onBalanceChanged(newBalance) {
+    		// gets updates out of the way that happen while parsing the values again when deleting address in list
+    		if (lastHash !== addressHash) {
+    			lastHash = addressHash;
+    			return;
+    		}
+
     		console.log("Balance from address " + addressHash + " changed to " + newBalance);
     		$$invalidate(2, onUpdate = true);
 
@@ -764,6 +771,7 @@ var app = (function (Iota) {
     		addressHash,
     		iotaBalance,
     		onUpdate,
+    		lastHash,
     		remove,
     		onBalanceChanged,
     		$chosenBalanceType
@@ -773,6 +781,7 @@ var app = (function (Iota) {
     		if ('addressHash' in $$props) $$invalidate(0, addressHash = $$props.addressHash);
     		if ('iotaBalance' in $$props) $$invalidate(1, iotaBalance = $$props.iotaBalance);
     		if ('onUpdate' in $$props) $$invalidate(2, onUpdate = $$props.onUpdate);
+    		if ('lastHash' in $$props) lastHash = $$props.lastHash;
     	};
 
     	if ($$props && "$$inject" in $$props) {

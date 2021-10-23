@@ -11,30 +11,30 @@ export const addresses = writable([]);
 
 // Adds address to the writable array addresses
 export function addAddress(newAddress:Address) {
-    addresses.update($address => {
-        const index = $address.findIndex((address => address.addressHash == newAddress.addressHash));
+    addresses.update($addresses => {
+        const index = $addresses.findIndex((address => address.addressHash == newAddress.addressHash));
         if(index > -1){
             throw new Error('Address is already listed');
         }
-        $address= [...$address, newAddress];
-        return $address;
+        $addresses= [...$addresses, newAddress];
+        return $addresses;
     });
 }
 
 // Removes address to the writable array addresses
 export function removeAddress(removableAddressHash:string) {
-    addresses.update($address => {
-        $address= $address.filter(t => t.addressHash !== removableAddressHash)
-        return $address;
+    addresses.update($addresses => {
+        $addresses= $addresses.filter(t => t.addressHash !== removableAddressHash)
+        return $addresses;
     });
 }
 
 // Adds new Amount to address.balance, is called when mqtt amount change was triggered inside the websocket
 export function addBalanceToAddress(addressHash: string, balance:number){
-    addresses.update($address => {
-        const index = $address.findIndex((address => address.addressHash == addressHash));
-        $address[index].balance = $address[index].balance + balance;
-        $address= [...$address];
-        return $address;
+    addresses.update($addresses => {
+        const index = $addresses.findIndex((address => address.addressHash == addressHash));
+        $addresses[index].balance = $addresses[index].balance + balance;
+        $addresses= [...$addresses];
+        return $addresses;
     });
 }
